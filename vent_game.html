@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ВЕНТИЛЯЦИЯ — браузерная версия</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#14161a;
+              font-family:'Segoe UI',Arial,sans-serif; touch-action:none; }
+  canvas { display:block; }
+  .panel { position:absolute; padding:6px 14px; background:rgba(10,12,16,0.65);
+           border:1px solid rgba(255,255,255,0.15); border-radius:8px;
+           color:#fff; font-weight:600; user-select:none; }
+  #hudLevel  { top:12px; left:12px; font-size:18px; }
+  #hudHearts { top:12px; left:50%; transform:translateX(-50%); font-size:22px; color:#ff5566; }
+  #hudCheck  { top:12px; right:52px; font-size:14px; color:#66d9ff; }
+  #hudVer    { bottom:10px; left:12px; font-size:12px; color:#888; background:rgba(10,12,16,0.5); }
+  #hudTotem  { bottom:12px; right:12px; font-size:15px; display:none; }
+  #crosshair { position:absolute; top:50%; left:50%; width:6px; height:6px; margin:-3px;
+               border-radius:50%; background:rgba(255,255,255,0.7); pointer-events:none; }
+  #msg { position:absolute; top:30%; width:100%; text-align:center; font-size:26px;
+         font-weight:700; color:#fff; text-shadow:0 2px 8px #000; opacity:0;
+         transition:opacity .4s; pointer-events:none; }
+  #tutorial { position:absolute; bottom:70px; width:100%; text-align:center;
+              font-size:16px; color:#cfd6e0; text-shadow:0 1px 4px #000; pointer-events:none; }
+  #flash { position:absolute; inset:0; opacity:0; transition:opacity .5s; pointer-events:none; }
+  #lockHint { position:absolute; top:55%; width:100%; text-align:center; font-size:20px;
+              color:#fff; text-shadow:0 2px 6px #000; display:none; }
+  #menuBtn { position:absolute; top:12px; right:10px; width:34px; height:34px;
+             background:rgba(10,12,16,0.65); border:1px solid rgba(255,255,255,0.2);
+             border-radius:8px; color:#fff; font-size:18px; display:none; text-align:center;
+             line-height:32px; user-select:none; }
+  .overlay { position:absolute; inset:0; background:rgba(8,10,14,0.9); display:none;
+             flex-direction:column; align-items:center; justify-content:center; z-index:10; }
+  #menu h2, #gameover h2 { color:#fff; margin-bottom:18px; font-size:30px; }
+  #levelGrid { display:grid; grid-template-columns:repeat(6,64px); gap:10px; }
+  #levelGrid button { width:64px; height:48px; font-size:18px; font-weight:700;
+                      background:#2a2f38; color:#fff; border:1px solid #556;
+                      border-radius:8px; cursor:pointer; }
+  #levelGrid button:hover { background:#3a4150; }
+  #menuClose { margin-top:22px; padding:10px 28px; font-size:16px; background:#3a4150;
+               color:#fff; border:none; border-radius:8px; cursor:pointer; }
+  #gameover h2 { color:#ff5566; text-align:center; }
+  #gameover p { color:#cfd6e0; font-size:18px; }
+  #joy { position:absolute; width:110px; height:110px; border-radius:50%;
+         border:2px solid rgba(255,255,255,0.3); background:rgba(255,255,255,0.06);
+         display:none; pointer-events:none; }
+  #joyknob { position:absolute; width:46px; height:46px; border-radius:50%;
+             background:rgba(255,255,255,0.35); display:none; pointer-events:none; }
+  #nointernet { z-index:20; }
+  #nointernet p { color:#fff; font-size:18px; max-width:420px; text-align:center; line-height:1.5; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+<div id="hudLevel" class="panel">УРОВЕНЬ 1</div>
+<div id="hudHearts" class="panel">❤❤❤</div>
+<div id="hudCheck" class="panel">ЧЕКПОИНТ: 1</div>
+<div id="hudVer" class="panel">VER W1</div>
+<div id="hudTotem" class="panel"></div>
+<div id="menuBtn">☰</div>
+<div id="crosshair"></div>
+<div id="msg"></div>
+<div id="tutorial">WASD / стрелки — ходить &nbsp;•&nbsp; мышь — смотреть &nbsp;•&nbsp; Tab — меню уровней &nbsp;•&nbsp; Shift — бежать</div>
+<div id="flash"></div>
+<div id="lockHint">Кликни, чтобы захватить мышь</div>
+<div id="joy"></div><div id="joyknob"></div>
+
+<div id="menu" class="overlay">
+  <h2>УРОВНИ</h2>
+  <div id="levelGrid"></div>
+  <button id="menuClose">Закрыть (Tab)</button>
+</div>
+
+<div id="gameover" class="overlay">
+  <h2>GAME OVER</h2>
+  <p>Нажми SPACE или коснись экрана — вернёшься на чекпоинт</p>
+</div>
+
+<div id="nointernet" class="overlay">
+  <p>Не удалось загрузить движок Three.js.<br>Для игры нужен интернет — открой файл через браузер с сетью.</p>
+</div>
+
+<script>
+if (typeof THREE === 'undefined') {
+  document.getElementById('nointernet').style.display = 'flex';
+} else {
+
+// ================== ЗВУК (генерируется в браузере) ==================
+let AC = null;
+function audio() {
+  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  if (AC.state === 'suspended') AC.resume();
+  return AC;
+}
+function tone(f1, f2, dur, type, vol, delay) {
+  const c = audio(), t0 = c.currentTime + (delay || 0);
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = type; o.frequency.setValueAtTime(f1, t0);
+  o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), t0 + dur);
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  o.connect(g).connect(c.destination);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+function noiseBurst(dur, vol, freq) {
+  const c = audio(), t0 = c.currentTime;
+  const buf = c.createBuffer(1, c.sampleRate * dur, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const src = c.createBufferSource(); src.buffer = buf;
+  const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = freq;
+  const g = c.createGain();
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  src.connect(f).connect(g).connect(c.destination);
+  src.start(t0);
+}
+const snd = {
+  step:      function () { noiseBurst(0.09, 0.15, 250); },
+  biteSmall: function () { tone(150, 70, 0.3, 'sawtooth', 0.25); noiseBurst(0.1, 0.2, 900); },
+  biteBig:   function () { tone(300, 950, 0.28, 'sawtooth', 0.3); noiseBurst(0.22, 0.3, 2500); },
+  pickup:    function () { tone(660, 660, 0.1, 'sine', 0.25); tone(880, 880, 0.14, 'sine', 0.25, 0.1); },
+  heal:      function () { tone(523, 523, 0.12, 'sine', 0.25); tone(659, 659, 0.12, 'sine', 0.25, 0.1); tone(784, 784, 0.2, 'sine', 0.25, 0.2); },
+  shield:    function () { tone(300, 900, 0.3, 'sine', 0.3); },
+  zap:       function () { tone(1400, 180, 0.22, 'square', 0.3); noiseBurst(0.15, 0.25, 3000); },
+  check:     function () { tone(660, 660, 0.15, 'sine', 0.3); tone(880, 880, 0.3, 'sine', 0.3, 0.16); },
+  death:     function () { tone(220, 55, 0.9, 'sawtooth', 0.3); },
+  grate:     function () { noiseBurst(0.3, 0.2, 700); tone(600, 250, 0.3, 'triangle', 0.15); }
+};
+let ambientStarted = false;
+function startAmbient() {
+  if (ambientStarted) return; ambientStarted = true;
+  const c = audio();
+  const g = c.createGain(); g.gain.value = 0.035; g.connect(c.destination);
+  [48, 96].forEach(function (f) {
+    const o = c.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+    o.connect(g); o.start();
+  });
+}
+
+// ================== ИГРА ==================
+const CELL = 4, EYE = 1.6;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14161a);
+scene.fog = new THREE.FogExp2(0x14161a, 0.045);
+const camera = new THREE.PerspectiveCamera(85, innerWidth / innerHeight, 0.1, 100);
+camera.rotation.order = 'YXZ';
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xbec3cd, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+sun.position.set(3, -6, 2); scene.add(sun);
+
+let level = 1, checkpoint = 1, lives = 3, unlocked = 1, totem = null;
+let gameOver = false, menuOpen = false;
+let world = null, wallsSet = new Set(), openCells = [];
+let wCur = 9, hCur = 9, goal = null, spiders = [], snail = null;
+let yaw = 0, pitch = 0, walkPhase = 0, lastStep = 0, lastDamage = -9;
+const clock = new THREE.Clock();
+
+// ---------- интерфейс ----------
+const el = function (id) { return document.getElementById(id); };
+function showMsg(text, color) {
+  const m = el('msg');
+  m.textContent = text; m.style.color = color || '#fff'; m.style.opacity = 1;
+  clearTimeout(showMsg.t);
+  showMsg.t = setTimeout(function () { m.style.opacity = 0; }, 1800);
+}
+function flash(color) {
+  const f = el('flash');
+  f.style.background = color; f.style.opacity = 0.35;
+  setTimeout(function () { f.style.opacity = 0; }, 120);
+}
+function updateHUD() {
+  el('hudLevel').textContent = 'УРОВЕНЬ ' + level;
+  let full = Math.floor(lives), s = '';
+  for (let i = 0; i < full; i++) s += '❤';
+  if (lives - full > 0.1) s += '♥';
+  el('hudHearts').textContent = s;
+  el('hudCheck').textContent = 'ЧЕКПОИНТ: ' + checkpoint;
+  const ht = el('hudTotem');
+  if (totem === 'shield') { ht.style.display = 'block'; ht.style.color = '#7CFC00'; ht.textContent = 'ТОТЕМ: ЩИТ'; }
+  else if (totem === 'killer') { ht.style.display = 'block'; ht.style.color = '#ffdd00'; ht.textContent = 'ТОТЕМ: УБИЙЦА ПАУКОВ'; }
+  else ht.style.display = 'none';
+}
+
+// ---------- лабиринт ----------
+function genMaze(w, h) {
+  const g = [];
+  for (let j = 0; j < h; j++) { g.push([]); for (let i = 0; i < w; i++) g[j].push('#'); }
+  const stack = [[1, 1]]; g[1][1] = '.';
+  while (stack.length) {
+    const cur = stack[stack.length - 1];
+    const dirs = [[2, 0], [-2, 0], [0, 2], [0, -2]];
+    for (let i = dirs.length - 1; i > 0; i--) {
+      const k = Math.floor(Math.random() * (i + 1)), tmp = dirs[i]; dirs[i] = dirs[k]; dirs[k] = tmp;
+    }
+    let moved = false;
+    for (let d = 0; d < 4; d++) {
+      const nx = cur[0] + dirs[d][0], ny = cur[1] + dirs[d][1];
+      if (nx > 0 && ny > 0 && nx < w - 1 && ny < h - 1 && g[ny][nx] === '#') {
+        g[cur[1] + dirs[d][1] / 2][cur[0] + dirs[d][0] / 2] = '.';
+        g[ny][nx] = '.'; stack.push([nx, ny]); moved = true; break;
+      }
+    }
+    if (!moved) stack.pop();
+  }
+  g[h - 2][w - 2] = '.';
+  return g;
+}
+function cellToWorld(i, j) {
+  return { x: (i - wCur / 2) * CELL + CELL / 2, z: (j - hCur / 2) * CELL + CELL / 2 };
+}
+function cellOf(px, pz) {
+  return [Math.floor(px / CELL + wCur / 2), Math.floor(pz / CELL + hCur / 2)];
+}
+function isWallCell(i, j) {
+  if (i < 0 || j < 0 || i >= wCur || j >= hCur) return true;
+  return wallsSet.has(i + '_' + j);
+}
+function freeAt(px, pz, r) {
+  const offs = [r, -r];
+  for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) {
+    const c = cellOf(px + offs[a], pz + offs[b]);
+    if (isWallCell(c[0], c[1])) return false;
+  }
+  return true;
+}
+
+// ---------- пауки ----------
+function makeSpider(big) {
+  const grp = new THREE.Group();
+  const dark = new THREE.MeshLambertMaterial({ color: big ? 0x2a2030 : 0x241c2a });
+  const darker = new THREE.MeshLambertMaterial({ color: 0x1a1420 });
+  const bw = big ? 1.3 : 0.65, bh = big ? 0.8 : 0.4, bl = big ? 1.8 : 0.9, by = big ? 0.9 : 0.35;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bl), dark);
+  body.position.y = by; grp.add(body);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.5, bh * 0.6, bl * 0.25), dark);
+  head.position.set(0, by, bl * 0.55); grp.add(head);
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+  for (let e = -1; e <= 1; e += 2) {
+    const eye = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.16, bh * 0.3, 0.06), eyeMat);
+    eye.position.set(e * bw * 0.18, by + bh * 0.22, bl * 0.55 + bl * 0.14);
+    grp.add(eye);
+  }
+  const legs = [];
+  for (let side = -1; side <= 1; side += 2) {
+    for (let k = 0; k < 4; k++) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, by * 2.2, 0.06), darker);
+      leg.position.set(side * bw * 0.85, by * 0.6, -bl * 0.35 + k * bl * 0.24);
+      leg.rotation.z = side * 0.6;
+      grp.add(leg); legs.push(leg);
+    }
+  }
+  return { g: grp, legs: legs };
+}
+
+// ---------- улитка ----------
+function makeSnail(type) {
+  const grp = new THREE.Group();
+  const col = type === 'shield' ? 0x7CFC00 : (type === 'heal' ? 0xff4444 : 0xffdd00);
+  const bodyMat = new THREE.MeshLambertMaterial({ color: 0xd8c9a0 });
+  const shellMat = new THREE.MeshLambertMaterial({ color: col, emissive: col, emissiveIntensity: 0.35 });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), bodyMat);
+  body.scale.set(1.8, 0.8, 1.0); body.position.y = 0.16; grp.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), bodyMat);
+  head.position.set(0.34, 0.2, 0); grp.add(head);
+  for (let s = -1; s <= 1; s += 2) {
+    const st = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.2), bodyMat);
+    st.position.set(0.38, 0.38, s * 0.07); st.rotation.z = -0.3; grp.add(st);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    eye.position.set(0.43, 0.49, s * 0.07); grp.add(eye);
+  }
+  for (let k = 0; k < 3; k++) {
+    const ring = new THREE.Mesh(new THREE.SphereGeometry(0.26 - k * 0.07, 12, 10), shellMat);
+    ring.scale.set(1, 1.05 - k * 0.15, 1);
+    ring.position.set(-0.12 - k * 0.06, 0.3 + k * 0.1, 0);
+    grp.add(ring);
+  }
+  return grp;
+}
+
+// ---------- сборка уровня ----------
+function shuffle(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const k = Math.floor(Math.random() * (i + 1)), t = a[i]; a[i] = a[k]; a[k] = t;
+  }
+  return a;
+}
+function manhattan(a, b) { return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]); }
+
+function buildLevel(n) {
+  if (world) scene.remove(world);
+  world = new THREE.Group(); scene.add(world);
+  wallsSet = new Set(); openCells = []; spiders = []; snail = null; goal = null;
+  wCur = hCur = Math.min(9 + Math.floor(n / 5) * 2, 25);
+  const g = genMaze(wCur, hCur);
+  for (let j = 0; j < hCur; j++) for (let i = 0; i < wCur; i++) {
+    if (g[j][i] === '#') wallsSet.add(i + '_' + j); else openCells.push([i, j]);
+  }
+  const fx = wCur * CELL / 2, fz = hCur * CELL / 2;
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(fx * 2, fz * 2),
+    new THREE.MeshLambertMaterial({ color: 0x4a4f57 }));
+  floor.rotation.x = -Math.PI / 2; world.add(floor);
+  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(fx * 2, fz * 2),
+    new THREE.MeshLambertMaterial({ color: 0x2e3338 }));
+  ceil.rotation.x = Math.PI / 2; ceil.position.y = 3.2; world.add(ceil);
+
+  for (const key of wallsSet) {
+    const p = key.split('_');
+    const pos = cellToWorld(+p[0], +p[1]);
+    const s = 0.85 + Math.random() * 0.15;
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(CELL, 3.2, CELL),
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(0.60 * s, 0.63 * s, 0.67 * s) }));
+    wall.position.set(pos.x, 1.6, pos.z); world.add(wall);
+  }
+  for (const c of openCells) {
+    if ((c[0] + c[1]) % 4 === 2) {
+      const pos = cellToWorld(c[0], c[1]);
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(CELL * 0.6, 0.06, CELL * 0.3),
+        new THREE.MeshBasicMaterial({ color: 0xeaf2ff }));
+      lamp.position.set(pos.x, 3.14, pos.z); world.add(lamp);
+    }
+  }
+  const sp = cellToWorld(1, 1);
+  camera.position.set(sp.x, EYE, sp.z); yaw = 0; pitch = 0;
+  const gp = cellToWorld(wCur - 2, hCur - 2);
+  goal = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.5, 1.5),
+    new THREE.MeshBasicMaterial({ color: 0x00cc44 }));
+  goal.position.set(gp.x, 1, gp.z); world.add(goal);
+
+  // пауки: уровень 1 — обучение без пауков
+  const smallCount = n < 2 ? 0 : Math.min(2 + Math.floor(n / 4), 4);
+  const bigCount = n < 15 ? 0 : Math.min(2 + Math.floor((n - 15) / 5), 5);
+  const far = openCells.filter(function (c) { return manhattan(c, [1, 1]) >= 6; });
+  const goalCell = [wCur - 2, hCur - 2];
+  const candidates = far.filter(function (c) { return manhattan(c, goalCell) >= 2; });
+  shuffle(candidates);
+  const chosen = [];
+  function pick(minDist) {
+    for (let i = 0; i < candidates.length; i++) {
+      let ok = true;
+      for (const ch of chosen) if (manhattan(candidates[i], ch) < minDist) { ok = false; break; }
+      if (ok) { chosen.push(candidates[i]); return candidates[i]; }
+    }
+    return null;
+  }
+  for (let k = 0; k < smallCount; k++) {
+    const c = pick(4); if (!c) break;
+    const pos = cellToWorld(c[0], c[1]);
+    const s = makeSpider(false);
+    s.g.position.set(pos.x, 0, pos.z);
+    s.g.rotation.y = Math.random() * Math.PI * 2;
+    spiders.push({ g: s.g, legs: s.legs, speed: 1.6, dmg: 0.5, big: false, hit: 0.9 });
+    world.add(s.g);
+  }
+  for (let k = 0; k < bigCount; k++) {
+    const c = pick(5); if (!c) break;
+    const pos = cellToWorld(c[0], c[1]);
+    const s = makeSpider(true);
+    s.g.position.set(pos.x, 0, pos.z);
+    s.g.rotation.y = Math.random() * Math.PI * 2;
+    spiders.push({ g: s.g, legs: s.legs, speed: 4.0, dmg: 1.0, big: true, hit: 1.6 });
+    world.add(s.g);
+  }
+
+  // улитка: одна, со 2-го уровня, в дальнем тупике
+  if (n >= 2) {
+    const isDead = function (c) {
+      let nw = 0;
+      if (isWallCell(c[0] + 1, c[1])) nw++;
+      if (isWallCell(c[0] - 1, c[1])) nw++;
+      if (isWallCell(c[0], c[1] + 1)) nw++;
+      if (isWallCell(c[0], c[1] - 1)) nw++;
+      return nw === 3;
+    };
+    const types = ['shield', 'heal', 'killer'];
+    const type = types[Math.floor(Math.random() * 3)];
+    let spots = openCells.filter(function (c) {
+      return isDead(c) && manhattan(c, [1, 1]) >= 4 && manhattan(c, goalCell) >= 2
+        && chosen.every(function (ch) { return manhattan(c, ch) > 0; });
+    });
+    if (!spots.length) spots = openCells.filter(function (c) {
+      return manhattan(c, [1, 1]) >= 4 && manhattan(c, goalCell) >= 2
+        && chosen.every(function (ch) { return manhattan(c, ch) > 0; });
+    });
+    if (spots.length) {
+      const c = spots[Math.floor(Math.random() * spots.length)];
+      const pos = cellToWorld(c[0], c[1]);
+      snail = { g: makeSnail(type), type: type, cell: c };
+      snail.g.position.set(pos.x, 0.1, pos.z);
+      world.add(snail.g);
+    }
+  }
+
+  el('tutorial').style.display = (n === 1) ? 'block' : 'none';
+  updateHUD();
+}
+
+// ---------- урон и смерть ----------
+function damage(amount, big) {
+  lives -= amount;
+  lastDamage = performance.now() / 1000;
+  if (big) snd.biteBig(); else snd.biteSmall();
+  flash('rgba(255,30,30,0.35)');
+  updateHUD();
+  if (lives <= 0) {
+    gameOver = true; lives = 0; updateHUD();
+    snd.death();
+    el('gameover').style.display = 'flex';
+    if (document.pointerLockElement) document.exitPointerLock();
+  }
+}
+function restartFromCheckpoint() {
+  gameOver = false;
+  el('gameover').style.display = 'none';
+  lives = 3; totem = null;
+  buildLevel(checkpoint);
+  lockIfDesktop();
+}
+
+// ---------- меню уровней ----------
+function openMenu() {
+  menuOpen = true;
+  const grid = el('levelGrid'); grid.innerHTML = '';
+  for (let i = 1; i <= unlocked; i++) {
+    const b = document.createElement('button');
+    b.textContent = i;
+    b.onclick = function () { level = i; closeMenu(); buildLevel(level); lockIfDesktop(); };
+    grid.appendChild(b);
+  }
+  el('menu').style.display = 'flex';
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+function closeMenu() { menuOpen = false; el('menu').style.display = 'none'; }
+
+// ---------- управление ----------
+const keys = {};
+addEventListener('keydown', function (e) {
+  startAmbient();
+  if (e.code === 'Tab') { e.preventDefault(); if (gameOver) return; menuOpen ? (closeMenu(), lockIfDesktop()) : openMenu(); return; }
+  if (e.code === 'Space' && gameOver) { restartFromCheckpoint(); return; }
+  keys[e.code] = true;
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.code) >= 0) e.preventDefault();
+});
+addEventListener('keyup', function (e) { keys[e.code] = false; });
+function key(k) { return keys[k] ? 1 : 0; }
+
+let isTouch = ('ontouchstart' in window);
+function lockIfDesktop() { if (!isTouch && !menuOpen) renderer.domElement.requestPointerLock(); }
+renderer.domElement.addEventListener('click', function () {
+  startAmbient();
+  if (!isTouch && !menuOpen && !gameOver) renderer.domElement.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', function () {
+  el('lockHint').style.display =
+    (!isTouch && !document.pointerLockElement && !menuOpen && !gameOver) ? 'block' : 'none';
+});
+addEventListener('mousemove', function (e) {
+  if (document.pointerLockElement) {
+    yaw -= e.movementX * 0.0022;
+    pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * 0.0022));
+  }
+});
+
+// сенсорное управление
+let joyId = null, lookId = null, joyBase = { x: 0, y: 0 }, joyVec = { x: 0, y: 0 }, lookLast = null;
+if (isTouch) {
+  el('menuBtn').style.display = 'block';
+  el('menuBtn').addEventListener('click', function (e) { e.stopPropagation(); menuOpen ? (closeMenu(), lockIfDesktop()) : openMenu(); });
+  addEventListener('touchstart', function (e) {
+    startAmbient();
+    if (gameOver) { restartFromCheckpoint(); return; }
+    if (menuOpen) return;
+    for (const t of e.changedTouches) {
+      if (t.clientX < innerWidth / 2 && joyId === null) {
+        joyId = t.identifier; joyBase = { x: t.clientX, y: t.clientY };
+        const j = el('joy'); j.style.display = 'block';
+        j.style.left = (t.clientX - 55) + 'px'; j.style.top = (t.clientY - 55) + 'px';
+        const k = el('joyknob'); k.style.display = 'block';
+        k.style.left = (t.clientX - 23) + 'px'; k.style.top = (t.clientY - 23) + 'px';
+      } else if (lookId === null) {
+        lookId = t.identifier; lookLast = { x: t.clientX, y: t.clientY };
+      }
+    }
+  }, { passive: false });
+  addEventListener('touchmove', function (e) {
+    if (menuOpen) return;
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === joyId) {
+        let dx = t.clientX - joyBase.x, dy = t.clientY - joyBase.y;
+        const len = Math.hypot(dx, dy), max = 55;
+        if (len > max) { dx = dx / len * max; dy = dy / len * max; }
+        joyVec = { x: dx / max, y: dy / max };
+        const k = el('joyknob');
+        k.style.left = (joyBase.x + dx - 23) + 'px'; k.style.top = (joyBase.y + dy - 23) + 'px';
+      } else if (t.identifier === lookId && lookLast) {
+        yaw -= (t.clientX - lookLast.x) * 0.005;
+        pitch = Math.max(-1.4, Math.min(1.4, pitch - (t.clientY - lookLast.y) * 0.005));
+        lookLast = { x: t.clientX, y: t.clientY };
+      }
+    }
+  }, { passive: false });
+  addEventListener('touchend', function (e) {
+    for (const t of e.changedTouches) {
+      if (t.identifier === joyId) {
+        joyId = null; joyVec = { x: 0, y: 0 };
+        el('joy').style.display = 'none'; el('joyknob').style.display = 'none';
+      }
+      if (t.identifier === lookId) { lookId = null; lookLast = null; }
+    }
+  });
+}
+el('menuClose').addEventListener('click', function () { closeMenu(); lockIfDesktop(); });
+addEventListener('resize', function () {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- игровой цикл ----------
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const now = performance.now() / 1000;
+
+  if (!gameOver && !menuOpen) {
+    // движение
+    let mz = 0, mx = 0;
+    if (isTouch) { mz = -joyVec.y; mx = joyVec.x; }
+    else {
+      mz = key('KeyW') + key('ArrowUp') - key('KeyS') - key('ArrowDown');
+      mx = key('KeyD') + key('ArrowRight') - key('KeyA') - key('ArrowLeft');
+    }
+    const moving = (mx !== 0 || mz !== 0);
+    if (moving) {
+      let speed = 6 * dt * (keys['ShiftLeft'] || keys['ShiftRight'] ? 1.8 : 1);
+      const len = Math.hypot(mx, mz);
+      const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+      const rgt = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+      const dir = new THREE.Vector3()
+        .addScaledVector(fwd, mz / (len || 1))
+        .addScaledVector(rgt, mx / (len || 1));
+      if (dir.lengthSq() > 0) {
+        dir.normalize().multiplyScalar(speed);
+        const nx = camera.position.x + dir.x;
+        if (freeAt(nx, camera.position.z, 0.6)) camera.position.x = nx;
+        const nz = camera.position.z + dir.z;
+        if (freeAt(camera.position.x, nz, 0.6)) camera.position.z = nz;
+        if (now - lastStep > 0.35) { snd.step(); lastStep = now; }
+      }
+      walkPhase += dt * 9;
+      camera.position.y = EYE + Math.sin(walkPhase) * 0.04;
+    } else {
+      camera.position.y += (EYE - camera.position.y) * dt * 8;
+    }
+    camera.rotation.y = yaw;
+    camera.rotation.x = pitch;
+
+    // улитка
+    if (snail) {
+      snail.g.rotation.y += dt * 1.5;
+      snail.g.position.y = 0.1 + Math.sin(now * 2) * 0.05;
+      const dxs = camera.position.x - snail.g.position.x;
+      const dzs = camera.position.z - snail.g.position.z;
+      if (dxs * dxs + dzs * dzs < 2.2) {
+        if (snail.type === 'shield') { totem = 'shield'; showMsg('ТОТЕМ: ЩИТ — спасёт от большого паука', '#7CFC00'); }
+        if (snail.type === 'killer') { totem = 'killer'; showMsg('ТОТЕМ: УБИЙЦА ПАУКОВ — убьёт большого паука', '#ffdd00'); }
+        if (snail.type === 'heal') {
+          lives = Math.min(3, lives + 1); snd.heal();
+          flash('rgba(60,255,120,0.3)');
+          showMsg('УЛИТКА ЛЕЧЕНИЯ: +1 ЖИЗНЬ', '#ff6666');
+        } else snd.pickup();
+        world.remove(snail.g); snail = null;
+        updateHUD();
+      }
+    }
+
+    // пауки
+    for (let i = spiders.length - 1; i >= 0; i--) {
+      const s = spiders[i];
+      const dx = camera.position.x - s.g.position.x;
+      const dz = camera.position.z - s.g.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 0.01) {
+        const step = s.speed * dt;
+        const nx = s.g.position.x + dx / dist * step;
+        const nz = s.g.position.z + dz / dist * step;
+        if (freeAt(nx, s.g.position.z, 0.4)) s.g.position.x = nx;
+        if (freeAt(s.g.position.x, nz, 0.4)) s.g.position.z = nz;
+        s.g.rotation.y = Math.atan2(dx, dz);
+        for (let k = 0; k < s.legs.length; k++)
+          s.legs[k].rotation.x = Math.sin(now * 10 + k) * 0.45;
+      }
+      if (dist < s.hit && now - lastDamage > 1.2) {
+        if (s.big && totem === 'shield') {
+          totem = null; snd.shield(); flash('rgba(60,255,120,0.3)');
+          showMsg('ЩИТ СПАС ОТ УКУСА!', '#7CFC00');
+          lastDamage = now; updateHUD();
+        } else if (s.big && totem === 'killer') {
+          totem = null; snd.zap(); flash('rgba(255,220,0,0.3)');
+          showMsg('УЛИТКА-УБИЙЦА УНИЧТОЖИЛА ПАУКА!', '#ffdd00');
+          lastDamage = now; world.remove(s.g); spiders.splice(i, 1); updateHUD();
+        } else {
+          damage(s.dmg, s.big);
+          if (dist > 0.01 && !gameOver) {
+            const kb = 1.5;
+            const kx = camera.position.x + dx / dist * kb;
+            const kz = camera.position.z + dz / dist * kb;
+            if (freeAt(kx, camera.position.z, 0.6)) camera.position.x = kx;
+            if (freeAt(camera.position.x, kz, 0.6)) camera.position.z = kz;
+          }
+        }
+      }
+    }
+
+    // финиш
+    if (goal) {
+      goal.rotation.y += dt * 1.6;
+      goal.position.y = 1 + Math.sin(now * 2) * 0.15;
+      const dgx = camera.position.x - goal.position.x;
+      const dgz = camera.position.z - goal.position.z;
+      if (dgx * dgx + dgz * dgz < 4.8) {
+        snd.grate();
+        level++;
+        unlocked = Math.max(unlocked, level);
+        if (level % 5 === 0 && level > checkpoint) {
+          checkpoint = level; snd.check();
+          showMsg('ЧЕКПОИНТ: УРОВЕНЬ ' + checkpoint, '#66d9ff');
+        }
+        buildLevel(level);
+      }
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+
+buildLevel(level);
+updateHUD();
+animate();
+
+}
+</script>
+</body>
+</html>
